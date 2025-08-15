@@ -1,9 +1,17 @@
-import fetch from "node-fetch";
-import { CronJob } from "cron";
-import TelegramBot from "node-telegram-bot-api";
-import { TELEGRAM_TOKEN, GITHUB_TOKEN, OWNER, REPO } from "./config.js";
+const { CronJob } = require("cron");
+const { TelegramClient } = require("telegram");
+const { StringSession } = require("telegram/sessions");
+const fs = require("fs");
+const input = require("input");
+const { GITHUB_TOKEN, OWNER, REPO, API_ID, API_HASH } = require("./config");
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: false });
+const SESSION_FILE = "./session.json";
+
+// Загружаем сессию из файла, если она есть
+let stringSession = new StringSession("");
+if (fs.existsSync(SESSION_FILE)) {
+  stringSession = new StringSession(fs.readFileSync(SESSION_FILE, "utf8"));
+}
 
 const HEADERS = {
   Authorization: `Bearer ${GITHUB_TOKEN}`,
@@ -20,9 +28,12 @@ async function loadFromGitHub(file) {
 }
 
 async function saveToGitHub(file, content, message) {
+  let sha = undefined;
   const getRes = await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${file}`, { headers: HEADERS });
-  const fileData = await getRes.json();
-  const sha = fileData.sha;
+  if (getRes.ok) {
+    const fileData = await getRes.json();
+    sha = fileData.sha;
+  }
 
   await fetch(`https://api.github.com/repos/${OWNER}/${REPO}/contents/${file}`, {
     method: "PUT",
@@ -35,7 +46,7 @@ async function saveToGitHub(file, content, message) {
   });
 }
 
-async function processSend() {
+async function processSend(client) {
   console.log(`[CRON] Проверка заданий...`);
 
   const sendData = await loadFromGitHub("send.json");
@@ -51,14 +62,15 @@ async function processSend() {
     return;
   }
 
-  for (const channelId of sendData.channelIds) {
+  for (const channelUsername of sendData.channelIds) { // ожидаем "@username"
     try {
-      await bot.sendMessage(channelId, `${post.content}`, { parse_mode: "HTML" });
-      console.log(`[SEND] Отправлено в ${channelId}`);
+      const entity = await client.getEntity(channelUsername);
+      await client.sendMessage(entity, { message: post.content });
+      console.log(`[SEND] Отправлено в ${channelUsername}`);
+      await new Promise(r => setTimeout(r, 2000));
     } catch (err) {
-      console.error(`[ERROR] Не удалось отправить в ${channelId}:`, err.message);
+      console.error(`[ERROR] Не удалось отправить в ${channelUsername}:`, err.message);
     }
-    time.sleep(2000);
   }
 
   const history = (await loadFromGitHub("history.json")) || [];
@@ -69,11 +81,31 @@ async function processSend() {
   });
   await saveToGitHub("history.json", history, "update history");
 
-  await saveToGitHub("send.json", { status: false }, "clear send.json");
+  await saveToGitHub("send.json", {}, "clear send.json");
 
-  console.log("[DONE] Задача выполнена и перенесена в историю");
+  console.log("[DONE] Задача выполнена и очищена");
 }
 
-new CronJob("*/5 * * * *", processSend, null, true, "Europe/Moscow");
+async function main() {
+  const client = new TelegramClient(stringSession, API_ID, API_HASH, {
+    connectionRetries: 5
+  });
 
-console.log("📢 Селф-бот запущен и проверяет GitHub каждые 5 минут...");
+  if (!fs.existsSync(SESSION_FILE) || fs.readFileSync(SESSION_FILE, "utf8").trim() === "") {
+    await client.start({
+      phoneNumber: async () => await input.text("Введи номер телефона: "),
+      password: async () => await input.text("Введи пароль 2FA (если есть): "),
+      phoneCode: async () => await input.text("Введи код из Telegram: "),
+      onError: (err) => console.log(err)
+    });
+
+    fs.writeFileSync(SESSION_FILE, client.session.save(), "utf8");
+    console.log("Сессия сохранена в session.json — теперь можно запускать через pm2 без повторной авторизации.");
+  } else {
+    await client.connect();
+  }
+
+  new CronJob("*/2 * * * *", () => processSend(client), null, true, "Europe/Moscow");
+}
+
+main();
