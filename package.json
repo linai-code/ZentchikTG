@@ -5,14 +5,15 @@
   "main": "index.js",
   "scripts": {
     "test": "node index.js",
-    "start": "pm2 start index.js --name zentBOT --watch"
+    "start": "pm2 start index.js --name zentBOT"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "cron": "^4.3.3",
-    "node-fetch": "^3.3.2",
-    "node-telegram-bot-api": "^0.66.0"
+    "input": "^1.0.1",
+    "node-telegram-bot-api": "^0.66.0",
+    "telegram": "^2.26.22"
   }
 }
